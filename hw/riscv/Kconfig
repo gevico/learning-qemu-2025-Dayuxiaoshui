@@ -129,6 +129,10 @@ config XIANGSHAN_KUNMINGHU
     select RISCV_IMSIC
     select SERIAL_MM
 
+config RISCV_G233
+    bool
+    default y
+
 config GEVICO_G233
     bool
     default y
@@ -138,3 +142,5 @@ config GEVICO_G233
     select SIFIVE_GPIO
     select SIFIVE_PWM
     select PL011
+    select SSI
+    select RISCV_G233

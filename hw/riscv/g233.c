@@ -35,7 +35,9 @@
 #include "hw/misc/unimp.h"
 #include "hw/char/pl011.h"
 
-/* TODO: you need include some header files */
+/* GPIO device header */
+#include "hw/gpio/sifive_gpio.h"
+#include "hw/ssi/ssi.h"
 
 static const MemMapEntry g233_memmap[] = {
     [G233_DEV_MROM] =     {     0x1000,     0x2000 },
@@ -44,6 +46,7 @@ static const MemMapEntry g233_memmap[] = {
     [G233_DEV_UART0] =    { 0x10000000,     0x1000 },
     [G233_DEV_GPIO0] =    { 0x10012000,     0x1000 },
     [G233_DEV_PWM0] =     { 0x10015000,     0x1000 },
+    [G233_DEV_SPI0] =     { 0x10018000,     0x1000 },
     [G233_DEV_DRAM] =     { 0x80000000, 0x40000000 },
 };
 
@@ -53,6 +56,13 @@ static void g233_soc_init(Object *obj)
      * You can add more devices here(e.g. cpu, gpio)
      * Attention: The cpu resetvec is 0x1004
      */
+    G233SoCState *s = RISCV_G233_SOC(obj);
+    
+    /* Initialize CPUs */
+    object_initialize_child(obj, "cpus", &s->cpus, TYPE_RISCV_HART_ARRAY);
+    
+    /* Initialize GPIO */
+    object_initialize_child(obj, "gpio", &s->gpio, TYPE_SIFIVE_GPIO);
 }
 
 static void g233_soc_realize(DeviceState *dev, Error **errp)
@@ -63,6 +73,12 @@ static void g233_soc_realize(DeviceState *dev, Error **errp)
     const MemMapEntry *memmap = g233_memmap;
 
     /* CPUs realize */
+    object_property_set_str(OBJECT(&s->cpus), "cpu-type", ms->cpu_type, &error_abort);
+    object_property_set_int(OBJECT(&s->cpus), "num-harts", ms->smp.cpus, &error_abort);
+    object_property_set_int(OBJECT(&s->cpus), "resetvec", 0x1004, &error_abort);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->cpus), errp)) {
+        return;
+    }
 
     /* Mask ROM */
     memory_region_init_rom(&s->mask_rom, OBJECT(dev), "riscv.g233.mrom",
@@ -119,6 +135,16 @@ static void g233_soc_realize(DeviceState *dev, Error **errp)
     create_unimplemented_device("riscv.g233.pwm0",
         memmap[G233_DEV_PWM0].base, memmap[G233_DEV_PWM0].size);
 
+    /* SPI0 */
+    s->spi0 = qdev_new("g233-spi");
+    if (!sysbus_realize(SYS_BUS_DEVICE(s->spi0), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(s->spi0), 0, memmap[G233_DEV_SPI0].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(s->spi0), 0,
+                       qdev_get_gpio_in(DEVICE(s->plic), G233_SPI0_IRQ));
+    
+
 }
 
 static void g233_soc_class_init(ObjectClass *oc, const void *data)
@@ -160,9 +186,13 @@ static void g233_machine_init(MachineState *machine)
     }
 
     /* Initialize SoC */
-
+    object_initialize_child(OBJECT(machine), "soc", &s->soc, TYPE_RISCV_G233_SOC);
+    qdev_realize(DEVICE(&s->soc), NULL, &error_fatal);
 
     /* Data Memory(DDR RAM) */
+    memory_region_add_subregion(get_system_memory(),
+                                memmap[G233_DEV_DRAM].base,
+                                machine->ram);
 
     /* Mask ROM reset vector */
     uint32_t reset_vec[5];
@@ -177,6 +207,26 @@ static void g233_machine_init(MachineState *machine)
     }
     rom_add_blob_fixed_as("mrom.reset", reset_vec, sizeof(reset_vec),
                           memmap[G233_DEV_MROM].base, &address_space_memory);
+
+    /* Connect Flash devices to SPI */
+    SSIBus *spi_bus = (SSIBus *)qdev_get_child_bus(s->soc.spi0, "ssi");
+    
+    /* Flash 0: W25X16 (2MB) on CS0 */
+    DeviceState *flash_dev = qdev_new("g233-flash");
+    qdev_prop_set_uint32(flash_dev, "size", 2 * 1024 * 1024);
+    qdev_realize_and_unref(flash_dev, BUS(spi_bus), &error_fatal);
+    
+    qemu_irq flash_cs = qdev_get_gpio_in_named(flash_dev, SSI_GPIO_CS, 0);
+    qdev_connect_gpio_out_named(s->soc.spi0, SSI_GPIO_CS, 0, flash_cs);
+    
+    /* Flash 1: W25X32 (4MB) on CS1 */
+    DeviceState *flash1_dev = qdev_new("g233-flash");
+    qdev_prop_set_uint32(flash1_dev, "size", 4 * 1024 * 1024);
+    qdev_prop_set_uint8(flash1_dev, "cs", 1);  /* Use CS1 */
+    qdev_realize_and_unref(flash1_dev, BUS(spi_bus), &error_fatal);
+    
+    qemu_irq flash1_cs = qdev_get_gpio_in_named(flash1_dev, SSI_GPIO_CS, 0);
+    qdev_connect_gpio_out_named(s->soc.spi0, SSI_GPIO_CS, 1, flash1_cs);
 
     riscv_boot_info_init(&boot_info, &s->soc.cpus);
     if (machine->kernel_filename) {

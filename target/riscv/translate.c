@@ -1206,13 +1206,23 @@ static uint32_t opcode_at(DisasContextBase *dcbase, target_ulong pc)
 /* Include decoders for factored-out extensions */
 #include "decode-XVentanaCondOps.c.inc"
 
+/* Include G233 custom instructions */
+#include "decode-g233.c.inc"
+#include "insn_trans/trans_rvg233.c.inc"
+
 /* The specification allows for longer insns, but not supported by qemu. */
 #define MAX_INSN_LEN  4
+
+static bool has_g233_p(const RISCVCPUConfig *cfg)
+{
+    return true;  /* G233 instructions always available */
+}
 
 const RISCVDecoder decoder_table[] = {
     { always_true_p, decode_insn32 },
     { has_xthead_p, decode_xthead},
     { has_XVentanaCondOps_p, decode_XVentanaCodeOps},
+    { has_g233_p, decode_g233},
 };
 
 const size_t decoder_table_size = ARRAY_SIZE(decoder_table);
