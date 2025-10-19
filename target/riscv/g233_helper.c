@@ -32,8 +32,8 @@ void helper_dma(CPURISCVState *env, target_ulong dst, target_ulong src, target_u
             break;
     }
     
-    /* Perform matrix transpose */
-    uint32_t temp[grain_size * grain_size];
+    /* Perform matrix transpose using dynamic allocation */
+    uint32_t *temp = g_malloc(grain_size * grain_size * sizeof(uint32_t));
     
     /* Read source matrix */
     for (int i = 0; i < grain_size; i++) {
@@ -48,6 +48,8 @@ void helper_dma(CPURISCVState *env, target_ulong dst, target_ulong src, target_u
             cpu_stl_data(env, dst + (i * grain_size + j) * 4, temp[j * grain_size + i]);
         }
     }
+    
+    g_free(temp);
 }
 
 /* Sort instruction - array sorting */
